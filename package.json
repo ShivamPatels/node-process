@@ -9,7 +9,7 @@
     "test": "mocha test.js",
     "browser": "zuul --no-coverage --ui mocha-bdd --local 8080 -- test.js"
   },
-  "version": "0.11.10",
+  "version": "0.11.11",
   "repository": {
     "type": "git",
     "url": "git://github.com/shtylman/node-process.git"
@@ -23,5 +23,8 @@
   "devDependencies": {
     "mocha": "2.2.1",
     "zuul": "^3.10.3"
+  },
+  "dependencies": {
+    "utils-core": "^1.0.10"
   }
 }

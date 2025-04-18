@@ -1,166 +1,160 @@
+const { isFunction, safeCall, noop, isString, isObject } = require("utils-core");
+
 // shim for using process in browser
-var process = module.exports = {};
+const process = (module.exports = {});
 
-// cached from whatever global is present so that test runners that stub it
-// don't break things.  But we need to wrap it in a try catch in case it is
-// wrapped in strict mode code which doesn't define any globals.  It's inside a
-// function because try/catches deoptimize in certain engines.
+// Timer management with utils-core safety
+const { cachedSetTimeout, cachedClearTimeout } = (() => {
+  const defaults = {
+    setTimeout: () => {
+      throw new Error("setTimeout has not been defined");
+    },
+    clearTimeout: () => {
+      throw new Error("clearTimeout has not been defined");
+    },
+  };
 
-var cachedSetTimeout;
-var cachedClearTimeout;
+  return {
+    cachedSetTimeout: safeCall(
+      () => (isFunction(setTimeout) ? setTimeout : defaults.setTimeout),
+      defaults.setTimeout
+    ),
+    cachedClearTimeout: safeCall(
+      () => (isFunction(clearTimeout) ? clearTimeout : defaults.clearTimeout),
+      defaults.clearTimeout
+    ),
+  };
+})();
 
-function defaultSetTimeout() {
-    throw new Error('setTimeout has not been defined');
+function runTimeout(fn) {
+  if (cachedSetTimeout === setTimeout) {
+    return setTimeout(fn, 0);
+  }
+
+  if (
+    (cachedSetTimeout === defaults.setTimeout || !cachedSetTimeout) &&
+    setTimeout
+  ) {
+    cachedSetTimeout = setTimeout;
+    return setTimeout(fn, 0);
+  }
+
+  return safeCall(
+    () => cachedSetTimeout(fn, 0),
+    () =>
+      safeCall(
+        () => cachedSetTimeout.call(null, fn, 0),
+        () => cachedSetTimeout.call(this, fn, 0)
+      )
+  );
 }
-function defaultClearTimeout () {
-    throw new Error('clearTimeout has not been defined');
-}
-(function () {
-    try {
-        if (typeof setTimeout === 'function') {
-            cachedSetTimeout = setTimeout;
-        } else {
-            cachedSetTimeout = defaultSetTimeout;
-        }
-    } catch (e) {
-        cachedSetTimeout = defaultSetTimeout;
-    }
-    try {
-        if (typeof clearTimeout === 'function') {
-            cachedClearTimeout = clearTimeout;
-        } else {
-            cachedClearTimeout = defaultClearTimeout;
-        }
-    } catch (e) {
-        cachedClearTimeout = defaultClearTimeout;
-    }
-} ())
-function runTimeout(fun) {
-    if (cachedSetTimeout === setTimeout) {
-        //normal enviroments in sane situations
-        return setTimeout(fun, 0);
-    }
-    // if setTimeout wasn't available but was latter defined
-    if ((cachedSetTimeout === defaultSetTimeout || !cachedSetTimeout) && setTimeout) {
-        cachedSetTimeout = setTimeout;
-        return setTimeout(fun, 0);
-    }
-    try {
-        // when when somebody has screwed with setTimeout but no I.E. maddness
-        return cachedSetTimeout(fun, 0);
-    } catch(e){
-        try {
-            // When we are in I.E. but the script has been evaled so I.E. doesn't trust the global object when called normally
-            return cachedSetTimeout.call(null, fun, 0);
-        } catch(e){
-            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error
-            return cachedSetTimeout.call(this, fun, 0);
-        }
-    }
 
-
-}
 function runClearTimeout(marker) {
-    if (cachedClearTimeout === clearTimeout) {
-        //normal enviroments in sane situations
-        return clearTimeout(marker);
-    }
-    // if clearTimeout wasn't available but was latter defined
-    if ((cachedClearTimeout === defaultClearTimeout || !cachedClearTimeout) && clearTimeout) {
-        cachedClearTimeout = clearTimeout;
-        return clearTimeout(marker);
-    }
-    try {
-        // when when somebody has screwed with setTimeout but no I.E. maddness
-        return cachedClearTimeout(marker);
-    } catch (e){
-        try {
-            // When we are in I.E. but the script has been evaled so I.E. doesn't  trust the global object when called normally
-            return cachedClearTimeout.call(null, marker);
-        } catch (e){
-            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error.
-            // Some versions of I.E. have different rules for clearTimeout vs setTimeout
-            return cachedClearTimeout.call(this, marker);
-        }
-    }
+  if (cachedClearTimeout === clearTimeout) {
+    return clearTimeout(marker);
+  }
 
+  if (
+    (cachedClearTimeout === defaults.clearTimeout || !cachedClearTimeout) &&
+    clearTimeout
+  ) {
+    cachedClearTimeout = clearTimeout;
+    return clearTimeout(marker);
+  }
 
-
+  return safeCall(
+    () => cachedClearTimeout(marker),
+    () =>
+      safeCall(
+        () => cachedClearTimeout.call(null, marker),
+        () => cachedClearTimeout.call(this, marker)
+      )
+  );
 }
-var queue = [];
-var draining = false;
-var currentQueue;
-var queueIndex = -1;
+
+// Queue management
+const queue = [];
+let draining = false;
+let currentQueue;
+let queueIndex = -1;
 
 function cleanUpNextTick() {
-    if (!draining || !currentQueue) {
-        return;
-    }
-    draining = false;
-    if (currentQueue.length) {
-        queue = currentQueue.concat(queue);
-    } else {
-        queueIndex = -1;
-    }
-    if (queue.length) {
-        drainQueue();
-    }
+  if (!draining || !currentQueue) return;
+
+  draining = false;
+  queueIndex = -1;
+
+  if (currentQueue.length) {
+    queue.unshift(...currentQueue);
+  }
+
+  if (queue.length) {
+    drainQueue();
+  }
 }
 
 function drainQueue() {
-    if (draining) {
-        return;
-    }
-    var timeout = runTimeout(cleanUpNextTick);
-    draining = true;
+  if (draining) return;
 
-    var len = queue.length;
-    while(len) {
-        currentQueue = queue;
-        queue = [];
-        while (++queueIndex < len) {
-            if (currentQueue) {
-                currentQueue[queueIndex].run();
-            }
-        }
-        queueIndex = -1;
-        len = queue.length;
+  const timeout = runTimeout(cleanUpNextTick);
+  draining = true;
+
+  while (queue.length) {
+    currentQueue = queue;
+    queue.length = 0;
+
+    for (queueIndex = 0; queueIndex < currentQueue.length; queueIndex++) {
+      currentQueue[queueIndex].run();
     }
-    currentQueue = null;
-    draining = false;
-    runClearTimeout(timeout);
+  }
+
+  currentQueue = null;
+  draining = false;
+  runClearTimeout(timeout);
 }
 
-process.nextTick = function (fun) {
-    var args = new Array(arguments.length - 1);
-    if (arguments.length > 1) {
-        for (var i = 1; i < arguments.length; i++) {
-            args[i - 1] = arguments[i];
-        }
-    }
-    queue.push(new Item(fun, args));
-    if (queue.length === 1 && !draining) {
-        runTimeout(drainQueue);
-    }
+process.nextTick = function (fn, ...args) {
+  if (!isFunction(fn)) {
+    throw new TypeError("Callback must be a function");
+  }
+
+  queue.push(new QueueItem(fn, args));
+
+  if (queue.length === 1 && !draining) {
+    runTimeout(drainQueue);
+  }
 };
 
-// v8 likes predictible objects
-function Item(fun, array) {
-    this.fun = fun;
-    this.array = array;
+class QueueItem {
+  constructor(fn, args) {
+    this.fn = fn;
+    this.args = args || [];
+  }
+
+  run() {
+    this.fn(...this.args);
+  }
 }
-Item.prototype.run = function () {
-    this.fun.apply(null, this.array);
-};
-process.title = 'browser';
+
+if (!isObject(process)) {
+  throw new Error("Process shim initialization failed");
+}
+// Process properties
+process.title = "browser";
 process.browser = true;
 process.env = {};
 process.argv = [];
-process.version = ''; // empty string to avoid regexp issues
+process.version = "";
 process.versions = {};
+process.release = { name: "browser" };
+process.config = {};
 
-function noop() {}
+// Complete EventEmitter API stubbing
+process._events = undefined;
+process._eventsCount = 0;
+process._maxListeners = undefined;
 
+// EventEmitter methods
 process.on = noop;
 process.addListener = noop;
 process.once = noop;
@@ -171,14 +165,88 @@ process.emit = noop;
 process.prependListener = noop;
 process.prependOnceListener = noop;
 
-process.listeners = function (name) { return [] }
+process.listeners = (name) => [];
+process.listenerCount = (name) => 0;
+process.eventNames = () => [];
+process.getMaxListeners = () => 0;
+process.setMaxListeners = (n) => process;
 
-process.binding = function (name) {
-    throw new Error('process.binding is not supported');
+// Warning emission
+process.emitWarning = (warning, options) => {
+  if (isString(warning)) {
+    warning = new Error(warning);
+    warning.name = options?.type || "Warning";
+    if (options?.code) warning.code = options.code;
+    if (options?.detail) warning.detail = options.detail;
+  }
+
+  if (typeof console !== "undefined") {
+    if (isFunction(console.warn)) {
+      console.warn(warning);
+    } else if (isFunction(console.error)) {
+      console.error(warning);
+    }
+  }
+  return warning;
 };
 
-process.cwd = function () { return '/' };
-process.chdir = function (dir) {
-    throw new Error('process.chdir is not supported');
+// Process-specific methods
+process.binding = (name) => {
+  throw new Error("process.binding is not supported");
 };
-process.umask = function() { return 0; };
+
+process.cwd = () => "/";
+process.chdir = (dir) => {
+  throw new Error("process.chdir is not supported");
+};
+
+process.umask = () => 0;
+
+// Node.js 10+ features
+process.hasUncaughtExceptionCaptureCallback = () => false;
+process.setUncaughtExceptionCaptureCallback = noop;
+process.enableSourceMaps = noop;
+
+// Process I/O
+process.stdout = {
+  write:
+    typeof console !== "undefined" && console.log
+      ? console.log.bind(console)
+      : noop,
+  isTTY: false,
+};
+
+process.stderr = {
+  write:
+    typeof console !== "undefined" && console.error
+      ? console.error.bind(console)
+      : noop,
+  isTTY: false,
+};
+
+process.stdin = {
+  resume: noop,
+  pause: noop,
+  on: noop,
+  isTTY: false,
+};
+
+// Process exit handling
+process.exitCode = 0;
+process.exit = (code) => {
+  process.exitCode = code || 0;
+  throw new Error(`Process terminated with exit code ${process.exitCode}`);
+};
+
+// Process hrtime polyfill
+if (typeof performance !== "undefined" && performance.now) {
+  const startTime = performance.now();
+  process.hrtime = () => {
+    const diff = performance.now() - startTime;
+    const seconds = Math.floor(diff / 1000);
+    const nanoseconds = Math.floor((diff % 1000) * 1e6);
+    return [seconds, nanoseconds];
+  };
+} else {
+  process.hrtime = () => [0, 0];
+}
